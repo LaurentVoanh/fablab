@@ -1,347 +1,287 @@
+<?php
+/**
+ * ╔══════════════════════════════════════════════════════════════════════╗
+ * ║  SCIENCE HUB ULTIMATE — INDEX.PHP                                    ║
+ * ║  Page d'accueil • Tableau de bord • Navigation principale            ║
+ * ║  Compatible Hostinger • SQLite • Mistral AI                          ║
+ * ╚══════════════════════════════════════════════════════════════════════╝
+ */
+
+require_once __DIR__ . '/config.php';
+
+// Récupération des statistiques
+$pdo = get_db();
+$total_hypotheses = $pdo->query("SELECT COUNT(*) FROM hypotheses")->fetchColumn();
+$pending_hypotheses = $pdo->query("SELECT COUNT(*) FROM hypotheses WHERE status = 'pending'")->fetchColumn();
+$validated_hypotheses = $pdo->query("SELECT COUNT(*) FROM hypotheses WHERE validation_score > 0.7")->fetchColumn();
+$total_articles = $pdo->query("SELECT COUNT(*) FROM articles")->fetchColumn();
+$total_rss = $pdo->query("SELECT COUNT(*) FROM rss_items")->fetchColumn();
+$recent_logs = get_recent_logs($SESSION_ID, 10);
+
+// Traitement RSS si demandé
+if(isset($_GET['refresh_rss'])) {
+    process_rss_feeds();
+    header('Location: index.php');
+    exit;
+}
+?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title><?= SITE_NAME ?> - Accueil</title>
+    <title>SCIENCE HUB ULTIMATE — Plateforme de Recherche Scientifique IA</title>
+    <meta name="description" content="Plateforme unifiée de recherche scientifique assistée par IA — 36 sources • Mistral AI • SQLite">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #2563eb;
-            --secondary: #7c3aed;
-            --accent: #06b6d4;
-            --dark: #1e293b;
-            --light: #f8fafc;
-            --success: #10b981;
-            --warning: #f59e0b;
+            --bg: #080c10;
+            --surface: #0d1319;
+            --surface2: #111820;
+            --surface3: #161f2a;
+            --border: rgba(0, 180, 255, 0.12);
+            --border2: rgba(0, 180, 255, 0.25);
+            --accent: #00c8ff;
+            --accent2: #0affb0;
+            --accent3: #ff3d6b;
+            --accent4: #ffd700;
+            --text: #c8dff0;
+            --text-dim: #5a7a95;
+            --text-bright: #e8f4ff;
+            --mono: 'Space Mono', 'Courier New', monospace;
+            --display: 'Syne', sans-serif;
         }
         
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 13px; }
         
-        body {
-            font-family: 'Segoe UI', system-ui, sans-serif;
-            background: linear-gradient(135deg, var(--dark) 0%, #0f172a 100%);
-            color: var(--light);
-            min-height: 100vh;
+        body::before {
+            content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+            background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+            opacity: 0.6;
         }
         
-        nav {
-            background: rgba(30, 41, 59, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 1rem 2rem;
-            position: fixed;
-            width: 100%;
-            top: 0;
-            z-index: 1000;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
+        #root { position: relative; z-index: 1; display: grid; grid-template-rows: auto auto 1fr auto; min-height: 100vh; }
+        
+        /* HEADER */
+        #header {
+            display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+            padding: 16px 24px; border-bottom: 1px solid var(--border2);
+            background: linear-gradient(180deg, rgba(0,200,255,0.05) 0%, transparent 100%);
         }
         
-        .nav-container {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        .header-brand {
+            font-family: var(--display); font-size: 22px; font-weight: 800;
+            color: var(--text-bright); letter-spacing: -0.5px;
+        }
+        .header-brand span { color: var(--accent); }
+        .header-sub { font-size: 9px; color: var(--text-dim); letter-spacing: 2px; text-transform: uppercase; }
+        
+        .nav-center { display: flex; gap: 8px; }
+        .nav-btn {
+            padding: 8px 16px; border: 1px solid var(--border);
+            background: var(--surface2); color: var(--text);
+            font-family: var(--mono); font-size: 11px; cursor: pointer;
+            transition: all 0.2s; text-decoration: none; display: inline-block;
+        }
+        .nav-btn:hover { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 15px rgba(0,200,255,0.2); }
+        .nav-btn.active { border-color: var(--accent2); color: var(--accent2); }
+        
+        .header-stats { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; font-size: 10px; color: var(--text-dim); }
+        
+        /* MAIN CONTENT */
+        #main { padding: 24px; display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 20px; align-content: start; }
+        
+        .card {
+            background: var(--surface); border: 1px solid var(--border);
+            padding: 20px; border-radius: 4px; position: relative; overflow: hidden;
+        }
+        .card::before {
+            content: ''; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+            background: linear-gradient(90deg, var(--accent), var(--accent2));
+        }
+        .card-title {
+            font-family: var(--display); font-size: 16px; font-weight: 700;
+            color: var(--text-bright); margin-bottom: 16px; display: flex; align-items: center; gap: 8px;
+        }
+        .card-icon { font-size: 18px; }
+        
+        .stat-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        .stat-item { text-align: center; padding: 12px; background: var(--surface2); border-radius: 4px; }
+        .stat-value { font-size: 24px; font-weight: 700; color: var(--accent); font-family: var(--display); }
+        .stat-label { font-size: 9px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 1px; margin-top: 4px; }
+        
+        .action-grid { display: grid; gap: 12px; }
+        .action-btn {
+            display: flex; align-items: center; gap: 12px; padding: 16px;
+            background: var(--surface2); border: 1px solid var(--border);
+            color: var(--text); text-decoration: none; font-size: 12px;
+            transition: all 0.2s; cursor: pointer;
+        }
+        .action-btn:hover { border-color: var(--accent); background: var(--surface3); }
+        .action-icon { font-size: 20px; width: 32px; text-align: center; }
+        .action-desc { flex: 1; }
+        .action-title { font-weight: 700; color: var(--text-bright); margin-bottom: 4px; }
+        .action-sub { font-size: 10px; color: var(--text-dim); }
+        
+        .log-list { max-height: 300px; overflow-y: auto; }
+        .log-item {
+            padding: 8px 0; border-bottom: 1px solid var(--border);
+            font-size: 11px; display: flex; gap: 8px;
+        }
+        .log-time { color: var(--text-dim); min-width: 80px; }
+        .log-msg { flex: 1; }
+        .log-type.info { color: var(--accent); }
+        .log-type.success { color: var(--accent2); }
+        .log-type.warning { color: var(--accent4); }
+        .log-type.error { color: var(--accent3); }
+        
+        .rss-section { margin-top: 20px; }
+        .rss-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .rss-list { display: grid; gap: 8px; max-height: 400px; overflow-y: auto; }
+        .rss-item {
+            padding: 12px; background: var(--surface2); border-left: 3px solid var(--accent);
+            font-size: 11px;
+        }
+        .rss-title { font-weight: 700; color: var(--text-bright); margin-bottom: 4px; }
+        .rss-meta { font-size: 9px; color: var(--text-dim); }
+        
+        /* FOOTER */
+        #footer {
+            padding: 16px 24px; border-top: 1px solid var(--border);
+            text-align: center; font-size: 10px; color: var(--text-dim);
         }
         
-        .logo {
-            font-size: 1.5rem;
-            font-weight: bold;
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        .nav-links {
-            display: flex;
-            gap: 1.5rem;
-            list-style: none;
-        }
-        
-        .nav-links a {
-            color: var(--light);
-            text-decoration: none;
-            padding: 0.5rem 1rem;
-            border-radius: 8px;
-            transition: all 0.3s;
-        }
-        
-        .nav-links a:hover {
-            background: rgba(37, 99, 235, 0.2);
-            color: var(--accent);
-        }
-        
-        .hero {
-            padding: 8rem 2rem 4rem;
-            text-align: center;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        .hero h1 {
-            font-size: 3.5rem;
-            margin-bottom: 1.5rem;
-            background: linear-gradient(90deg, var(--primary), var(--accent), var(--secondary));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        .hero p {
-            font-size: 1.3rem;
-            opacity: 0.9;
-            margin-bottom: 3rem;
-            line-height: 1.8;
-        }
-        
-        .features {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
-            gap: 2rem;
-            padding: 2rem;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-        
-        .feature-card {
-            background: rgba(30, 41, 59, 0.6);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 16px;
-            padding: 2rem;
-            transition: all 0.3s;
-            cursor: pointer;
-        }
-        
-        .feature-card:hover {
-            transform: translateY(-5px);
-            border-color: var(--primary);
-            box-shadow: 0 20px 40px rgba(37, 99, 235, 0.2);
-        }
-        
-        .feature-icon {
-            font-size: 3rem;
-            margin-bottom: 1rem;
-        }
-        
-        .feature-card h3 {
-            font-size: 1.5rem;
-            margin-bottom: 1rem;
-            color: var(--accent);
-        }
-        
-        .feature-card p {
-            opacity: 0.8;
-            line-height: 1.6;
-        }
-        
-        .cta-buttons {
-            display: flex;
-            gap: 1rem;
-            justify-content: center;
-            margin-top: 3rem;
-            flex-wrap: wrap;
-        }
-        
-        .btn {
-            padding: 1rem 2rem;
-            border-radius: 12px;
-            text-decoration: none;
-            font-weight: bold;
-            transition: all 0.3s;
-            border: none;
-            cursor: pointer;
-            font-size: 1rem;
-        }
-        
-        .btn-primary {
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            transform: scale(1.05);
-            box-shadow: 0 10px 30px rgba(37, 99, 235, 0.4);
-        }
-        
-        .btn-secondary {
-            background: transparent;
-            border: 2px solid var(--accent);
-            color: var(--accent);
-        }
-        
-        .btn-secondary:hover {
-            background: var(--accent);
-            color: var(--dark);
-        }
-        
-        .stats {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 2rem;
-            padding: 4rem 2rem;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        
-        .stat-card {
-            text-align: center;
-            padding: 2rem;
-            background: rgba(30, 41, 59, 0.4);
-            border-radius: 12px;
-        }
-        
-        .stat-number {
-            font-size: 3rem;
-            font-weight: bold;
-            color: var(--accent);
-            margin-bottom: 0.5rem;
-        }
-        
-        .stat-label {
-            opacity: 0.8;
-            font-size: 1.1rem;
-        }
-        
-        footer {
-            text-align: center;
-            padding: 3rem 2rem;
-            border-top: 1px solid rgba(255,255,255,0.1);
-            margin-top: 4rem;
-            opacity: 0.7;
-        }
-        
+        /* RESPONSIVE */
         @media (max-width: 768px) {
-            .hero h1 { font-size: 2.5rem; }
-            .nav-links { display: none; }
-            .features { grid-template-columns: 1fr; }
+            #header { grid-template-columns: 1fr; gap: 12px; text-align: center; }
+            .header-stats { align-items: center; }
+            #main { grid-template-columns: 1fr; }
         }
     </style>
 </head>
 <body>
-    <nav>
-        <div class="nav-container">
-            <div class="logo">🔬 Science Hub Ultimate</div>
-            <ul class="nav-links">
-                <li><a href="index.php">Accueil</a></li>
-                <li><a href="autonomous.php">Mode Autonome</a></li>
-                <li><a href="guided.php">Mode Guidé</a></li>
-                <li><a href="dashboard.php">Dashboard</a></li>
-                <li><a href="hypotheses.php">Hypothèses</a></li>
-                <li><a href="articles.php">Articles</a></li>
-                <li><a href="lab.php">Laboratoire</a></li>
-                <li><a href="api.php">API</a></li>
-                <li><a href="settings.php">Settings</a></li>
-            </ul>
-        </div>
-    </nav>
-
-    <section class="hero">
-        <h1>Plateforme de Recherche Scientifique IA Multistep</h1>
-        <p>
-            Générez des hypothèses scientifiques inédites, analysez des milliers d'articles, 
-            et conduisez des recherches autonomes grâce à l'IA Mistral en workflow multi-étapes.
-            Compatible avec 36 APIs scientifiques et optimisé pour Hostinger.
-        </p>
-        <div class="cta-buttons">
-            <a href="autonomous.php" class="btn btn-primary">🚀 Lancer Mode Autonome</a>
-            <a href="guided.php" class="btn btn-secondary">📋 Mode Guidé</a>
-            <a href="dashboard.php" class="btn btn-secondary">📊 Voir Dashboard</a>
-        </div>
-    </section>
-
-    <section class="features">
-        <div class="feature-card" onclick="location.href='autonomous.php'">
-            <div class="feature-icon">🤖</div>
-            <h3>GENESIS-ULTRA v9.1</h3>
-            <p>Agent autonome en 9 étapes générant des hypothèses scientifiques inédites avec validation automatique et scoring de confiance.</p>
-        </div>
+    <div id="root">
+        <!-- HEADER -->
+        <header id="header">
+            <div class="header-left">
+                <div class="header-brand">SCIENCE HUB <span>ULTIMATE</span></div>
+                <div class="header-sub">Plateforme de Recherche Scientifique IA v<?= SCIENCE_HUB_VERSION ?></div>
+            </div>
+            
+            <nav class="nav-center">
+                <a href="index.php" class="nav-btn active">🏠 Accueil</a>
+                <a href="autonomous.php" class="nav-btn">🤖 Mode Autonome</a>
+                <a href="guided.php" class="nav-btn">📋 Mode Guidé</a>
+                <a href="dashboard.php" class="nav-btn">📊 Dashboard</a>
+                <a href="hypotheses.php" class="nav-btn">💡 Hypothèses</a>
+                <a href="articles.php" class="nav-btn">📄 Articles</a>
+                <a href="lab.php" class="nav-btn">🧪 Lab</a>
+                <a href="settings.php" class="nav-btn">⚙️ Settings</a>
+            </nav>
+            
+            <div class="header-stats">
+                <div>Session: <?= substr($SESSION_ID, 0, 8) ?>...</div>
+                <div><?= $total_hypotheses ?> hypothèses • <?= $total_articles ?> articles</div>
+            </div>
+        </header>
         
-        <div class="feature-card" onclick="location.href='guided.php'">
-            <div class="feature-icon">🎯</div>
-            <h3>Workflow Guidé V3</h3>
-            <p>Processus interactif en 6 étapes avec accès à 36 sources scientifiques et prompts IA spécialisés multi-couches.</p>
-        </div>
+        <!-- MAIN CONTENT -->
+        <main id="main">
+            <!-- STATISTIQUES -->
+            <div class="card">
+                <div class="card-title"><span class="card-icon">📊</span> Statistiques Globales</div>
+                <div class="stat-grid">
+                    <div class="stat-item">
+                        <div class="stat-value"><?= $total_hypotheses ?></div>
+                        <div class="stat-label">Hypothèses</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?= $pending_hypotheses ?></div>
+                        <div class="stat-label">En Attente</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?= $validated_hypotheses ?></div>
+                        <div class="stat-label">Validées</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value"><?= $total_articles ?></div>
+                        <div class="stat-label">Articles</div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- MODES DE RECHERCHE -->
+            <div class="card">
+                <div class="card-title"><span class="card-icon">🚀</span> Modes de Recherche</div>
+                <div class="action-grid">
+                    <a href="autonomous.php" class="action-btn">
+                        <span class="action-icon">🤖</span>
+                        <div class="action-desc">
+                            <div class="action-title">Mode Autonome (GENESIS-ULTRA v9.1)</div>
+                            <div class="action-sub">Agent IA en 9 étapes • Sélection automatique de cibles • 8 sources scientifiques</div>
+                        </div>
+                    </a>
+                    <a href="guided.php" class="action-btn">
+                        <span class="action-icon">📋</span>
+                        <div class="action-desc">
+                            <div class="action-title">Mode Guidé (GENESIS-ULTRA V3)</div>
+                            <div class="action-sub">Workflow interactif • 36 sources • Contrôle manuel des étapes</div>
+                        </div>
+                    </a>
+                </div>
+            </div>
+            
+            <!-- DERNIERS LOGS -->
+            <div class="card">
+                <div class="card-title"><span class="card-icon">📝</span> Activité Récente</div>
+                <div class="log-list">
+                    <?php if(empty($recent_logs)): ?>
+                        <div class="log-item"><span class="log-msg" style="color: var(--text-dim);">Aucune activité récente</span></div>
+                    <?php else: ?>
+                        <?php foreach($recent_logs as $log): ?>
+                            <div class="log-item">
+                                <span class="log-time"><?= date('H:i:s', strtotime($log['created_at'])) ?></span>
+                                <span class="log-msg log-type <?= $log['log_type'] ?>">[<?= $log['phase'] ?>] <?= htmlspecialchars($log['message']) ?></span>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+            
+            <!-- FLUX RSS -->
+            <div class="card rss-section" style="grid-column: 1 / -1;">
+                <div class="rss-header">
+                    <div class="card-title"><span class="card-icon">📡</span> Flux RSS Scientifiques (24 sources)</div>
+                    <a href="?refresh_rss=1" class="nav-btn">🔄 Actualiser</a>
+                </div>
+                <div class="rss-list">
+                    <?php
+                    $rss_items = get_rss_items(12);
+                    if(empty($rss_items)):
+                    ?>
+                        <div class="rss-item" style="color: var(--text-dim);">Aucun flux RSS. Cliquez sur "Actualiser" pour charger les dernières news scientifiques.</div>
+                    <?php else: ?>
+                        <?php foreach($rss_items as $item): ?>
+                            <div class="rss-item">
+                                <div class="rss-title"><?= htmlspecialchars($item['title']) ?></div>
+                                <div class="rss-meta">
+                                    <?= htmlspecialchars($item['feed_name']) ?> • 
+                                    <?php if($item['pub_date']): ?><?= date('d/m/Y', strtotime($item['pub_date'])) ?><?php endif; ?> • 
+                                    Catégorie: <?= htmlspecialchars($item['category']) ?>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
+            </div>
+        </main>
         
-        <div class="feature-card" onclick="location.href='dashboard.php'">
-            <div class="feature-icon">🧠</div>
-            <h3>Moteur de Conscience IA</h3>
-            <p>Apprentissage continu, optimisation automatique des stratégies et amélioration progressive des résultats.</p>
-        </div>
-        
-        <div class="feature-card" onclick="location.href='articles.php'">
-            <div class="feature-icon">📰</div>
-            <h3>Science Pulse Admin</h3>
-            <p>Crawl RSS automatisé, traitement IA d'articles scientifiques et versioning intelligent de contenu.</p>
-        </div>
-        
-        <div class="feature-card" onclick="location.href='lab.php'">
-            <div class="feature-icon">⚗️</div>
-            <h3>Générateur d'Expériences</h3>
-            <p>Transformation automatique d'articles en code PHP/JS interactif pour simulations et tests.</p>
-        </div>
-        
-        <div class="feature-card" onclick="location.href='api.php'">
-            <div class="feature-icon">🔌</div>
-            <h3>API Unifiée</h3>
-            <p>Accès programmatique à toutes les fonctionnalités avec rotation de clés Mistral et caching intelligent.</p>
-        </div>
-    </section>
-
-    <section class="stats">
-        <div class="stat-card">
-            <div class="stat-number" id="stat-hypotheses">0</div>
-            <div class="stat-label">Hypothèses Générées</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="stat-articles">0</div>
-            <div class="stat-label">Articles Analysés</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="stat-experiments">0</div>
-            <div class="stat-label">Expériences Créées</div>
-        </div>
-        <div class="stat-card">
-            <div class="stat-number" id="stat-apis">36</div>
-            <div class="stat-label">APIs Connectées</div>
-        </div>
-    </section>
-
-    <footer>
-        <p>© 2025 Science Hub Ultimate v<?= SITE_VERSION ?> | Propulsé par Mistral AI + SQLite | Optimisé pour Hostinger</p>
-        <p style="margin-top: 0.5rem; font-size: 0.9rem;">
-            Recherche scientifique augmentée par IA multistep • Workflows autonomes • Apprentissage continu
-        </p>
-    </footer>
-
-    <script>
-        // Charger les statistiques depuis la base de données
-        async function loadStats() {
-            try {
-                const response = await fetch('api.php?action=getStats');
-                const data = await response.json();
-                
-                animateNumber('stat-hypotheses', data.hypotheses || 0);
-                animateNumber('stat-articles', data.articles || 0);
-                animateNumber('stat-experiments', data.experiments || 0);
-            } catch (error) {
-                console.log('Stats non disponibles');
-            }
-        }
-        
-        function animateNumber(elementId, target) {
-            const element = document.getElementById(elementId);
-            let current = 0;
-            const increment = target / 50;
-            const timer = setInterval(() => {
-                current += increment;
-                if (current >= target) {
-                    element.textContent = target.toLocaleString();
-                    clearInterval(timer);
-                } else {
-                    element.textContent = Math.floor(current).toLocaleString();
-                }
-            }, 30);
-        }
-        
-        loadStats();
-    </script>
+        <!-- FOOTER -->
+        <footer id="footer">
+            SCIENCE HUB ULTIMATE v<?= SCIENCE_HUB_VERSION ?> • Compatible Hostinger • Mistral AI • SQLite • 36 Sources Scientifiques • 24 Flux RSS
+        </footer>
+    </div>
 </body>
 </html>

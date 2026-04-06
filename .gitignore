@@ -4,12 +4,13 @@
 __pycache__/
 *.o
 *.obj
-dist/
-build/
 
 # Dependencies
-vendor/
+.venv/
+venv/
 node_modules/
+dist/
+build/
 
 # Logs and temp files
 *.log
@@ -19,13 +20,30 @@ node_modules/
 # Environment
 .env
 .env.local
-.env.*
+*.env.*
 
 # Editors
 .vscode/
 .idea/
 
-# OS generated files
+# System files
 .DS_Store
 Thumbs.db
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# Python specific
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+
+# Web specific
+*.css.map
+*.js.map
 ```
