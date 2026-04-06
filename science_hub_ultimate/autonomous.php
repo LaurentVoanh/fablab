@@ -1,667 +1,487 @@
 <?php
-require_once 'config.php';
+/**
+ * ╔══════════════════════════════════════════════════════════════════════╗
+ * ║  SCIENCE HUB ULTIMATE — AUTONOMOUS.PHP                               ║
+ * ║  GENESIS-ULTRA v9.1 — Mode Autonome • 9 étapes • IA multi-couches   ║
+ * ║  Compatible Hostinger • SQLite • Mistral AI • 8 sources             ║
+ * ╚══════════════════════════════════════════════════════════════════════╝
+ */
 
-// Mode autonome GENESIS-ULTRA v9.1 - 9 étapes
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    $action = sanitizeInput($_POST['action']);
+require_once __DIR__ . '/config.php';
+
+// Gestion état session
+$state_file = STORAGE_PATH . 'auto_queue/state_' . $SESSION_ID . '.json';
+$state = file_exists($state_file) ? json_decode(file_get_contents($state_file), true) : null;
+
+if(!$state) {
+    $state = [
+        'session_id' => $SESSION_ID,
+        'step' => 0,
+        'target' => null,
+        'memory' => [],
+        'hypotheses' => [],
+        'searched_targets' => [],
+        'sources_this_run' => [],
+        'error_count' => 0,
+        'current_phase' => 'idle',
+        'started_at' => time(),
+    ];
+}
+
+// Action: Démarrer/Continuer recherche
+if($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $action = $_POST['action'];
     
-    if ($action === 'start_autonomous') {
-        $domain = sanitizeInput($_POST['domain'] ?? 'sciences generales');
-        $topic = sanitizeInput($_POST['topic'] ?? '');
-        
-        try {
-            // Étape 1: Génération d'hypothèse initiale
-            $step1Prompt = "Tu es GENESIS-ULTRA v9.1, un agent de recherche scientifique autonome.
-            
-Domaine: $domain
-Sujet: $topic
-
-ÉTAPE 1/9: Génère une hypothèse scientifique révolutionnaire et testable dans ce domaine.
-L'hypothèse doit être:
-- Innovante et non triviale
-- Falsifiable et testable expérimentalement
-- Basée sur des principes scientifiques solides
-- Potentiellement disruptive pour le domaine
-
-Format JSON attendu:
-{
-  \"hypothesis\": \"...\",
-  \"rationale\": \"...\",
-  \"novelty_score\": 0-10,
-  \"testability_score\": 0-10,
-  \"potential_impact\": \"...\" 
-}";
-
-            $step1Response = callMistralAI($step1Prompt, "Expert en génération d'hypothèses scientifiques révolutionnaires.");
-            $hypothesisData = json_decode($step1Response, true) ?? ['hypothesis' => $step1Response];
-            
-            // Sauvegarder l'hypothèse
-            $db = getDB();
-            $stmt = $db->prepare("INSERT INTO hypotheses (title, description, domain, confidence_score, status, workflow_mode, steps_completed, total_steps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-            $stmt->execute([
-                $hypothesisData['hypothesis'] ?? 'Hypothèse générée',
-                $hypothesisData['rationale'] ?? '',
-                $domain,
-                ($hypothesisData['novelty_score'] ?? 5 + $hypothesisData['testability_score'] ?? 5) / 20,
-                'in_progress',
-                'autonomous',
-                1,
-                9
-            ]);
-            $hypothesisId = $db->lastInsertId();
-            
-            jsonResponse([
-                'success' => true,
-                'hypothesis_id' => $hypothesisId,
-                'step' => 1,
-                'data' => $hypothesisData,
-                'message' => 'Étape 1/9 complétée: Hypothèse générée'
-            ]);
-        } catch (Exception $e) {
-            jsonResponse(['success' => false, 'error' => $e->getMessage()], 500);
-        }
+    if($action === 'start' || $action === 'continue') {
+        // Exécution étape par étape
+        execute_step($state);
+        save_state($state_file, $state);
+        header('Content-Type: application/json');
+        echo json_encode(['success' => true, 'state' => $state]);
+        exit;
     }
     
-    if ($action === 'continue_workflow') {
-        $hypothesisId = (int)$_POST['hypothesis_id'];
-        $currentStep = (int)$_POST['current_step'];
-        
-        try {
-            $db = getDB();
-            $hypothesis = $db->query("SELECT * FROM hypotheses WHERE id = $hypothesisId")->fetch();
-            
-            if (!$hypothesis) {
-                throw new Exception("Hypothèse non trouvée");
-            }
-            
-            $nextStep = $currentStep + 1;
-            $response = null;
-            $stepData = [];
-            
-            // Workflow en 9 étapes
-            switch ($nextStep) {
-                case 2:
-                    // Recherche bibliographique
-                    $prompt = "ÉTAPE 2/9: Pour l'hypothèse suivante, identifie 10-15 articles scientifiques pertinents.
-                    
-Hypothèse: {$hypothesis['title']}
-Domaine: {$hypothesis['domain']}
-
-Pour chaque article, fournis:
-- Titre
-- Résumé court
-- DOI ou URL
-- Pertinence (0-10)
-- Année de publication
-
-Format JSON array.";
-                    $response = callMistralAI($prompt, "Expert en revue bibliographique scientifique.");
-                    $stepData['articles'] = json_decode($response, true) ?? [];
-                    $sourcesCount = count($stepData['articles']);
-                    break;
-                    
-                case 3:
-                    // Analyse critique
-                    $prompt = "ÉTAPE 3/9: Analyse critique de l'hypothèse et des sources.
-                    
-Hypothèse: {$hypothesis['title']}
-
-Fournis:
-- Points forts de l'hypothèse
-- Faiblesses potentielles
-- Contre-arguments possibles
-- Biais identifiés
-- Recommandations d'amélioration
-
-Format JSON structuré.";
-                    $response = callMistralAI($prompt, "Expert en analyse critique scientifique.");
-                    $stepData['analysis'] = json_decode($response, true);
-                    $sourcesCount = $hypothesis['sources_count'];
-                    break;
-                    
-                case 4:
-                    // Conception expérimentale
-                    $prompt = "ÉTAPE 4/9: Conçois un protocole expérimental complet pour tester l'hypothèse.
-                    
-Hypothèse: {$hypothesis['title']}
-
-Inclus:
-- Objectifs expérimentaux
-- Matériel nécessaire
-- Protocole étape par étape
-- Contrôles requis
-- Méthodes d'analyse
-- Critères de succès
-
-Format JSON détaillé.";
-                    $response = callMistralAI($prompt, "Expert en méthodologie expérimentale.");
-                    $stepData['protocol'] = json_decode($response, true);
-                    $sourcesCount = $hypothesis['sources_count'];
-                    break;
-                    
-                case 5:
-                    // Simulation prédictive
-                    $prompt = "ÉTAPE 5/9: Génère des prédictions quantitatives basées sur l'hypothèse.
-                    
-Hypothèse: {$hypothesis['title']}
-
-Fournis:
-- Prédictions principales avec valeurs numériques
-- Intervalles de confiance
-- Scénarios alternatifs
-- Signatures expérimentales attendues
-
-Format JSON avec données structurées.";
-                    $response = callMistralAI($prompt, "Expert en modélisation prédictive.");
-                    $stepData['predictions'] = json_decode($response, true);
-                    $sourcesCount = $hypothesis['sources_count'];
-                    break;
-                    
-                case 6:
-                    // Validation croisée
-                    $prompt = "ÉTAPE 6/9: Validation croisée avec les connaissances actuelles.
-                    
-Hypothèse: {$hypothesis['title']}
-
-Vérifie:
-- Compatibilité avec théories établies
-- Incohérences potentielles
-- Domaines d'application
-- Limites de validité
-
-Format JSON analytique.";
-                    $response = callMistralAI($prompt, "Expert en validation scientifique.");
-                    $stepData['validation'] = json_decode($response, true);
-                    $sourcesCount = $hypothesis['sources_count'];
-                    break;
-                    
-                case 7:
-                    // Optimisation
-                    $prompt = "ÉTAPE 7/9: Optimise l'hypothèse et le protocole.
-                    
-Hypothèse: {$hypothesis['title']}
-
-Propose:
-- Version optimisée de l'hypothèse
-- Améliorations du protocole
-- Réduction des coûts/temps
-- Augmentation de la précision
-
-Format JSON avec comparaisons avant/après.";
-                    $response = callMistralAI($prompt, "Expert en optimisation de recherche.");
-                    $stepData['optimization'] = json_decode($response, true);
-                    $sourcesCount = $hypothesis['sources_count'];
-                    break;
-                    
-                case 8:
-                    // Génération de code
-                    $prompt = "ÉTAPE 8/9: Génère du code PHP/JS pour une simulation interactive de l'expérience.
-                    
-Hypothèse: {$hypothesis['title']}
-Protocole: " . json_encode($hypothesis['description'] ?? '') . "
-
-Fournis:
-- Code PHP pour backend
-- Code JS pour visualisation
-- Interface utilisateur simple
-- Paramètres ajustables
-
-Format JSON avec champs 'php_code' et 'js_code'.";
-                    $response = callMistralAI($prompt, "Expert en développement scientifique.");
-                    $stepData['code'] = json_decode($response, true);
-                    $sourcesCount = $hypothesis['sources_count'];
-                    break;
-                    
-                case 9:
-                    // Rapport final
-                    $prompt = "ÉTAPE 9/9: Génère un rapport scientifique complet.
-                    
-Hypothèse: {$hypothesis['title']}
-Domaine: {$hypothesis['domain']}
-
-Inclus:
-- Résumé exécutif
-- Contexte scientifique
-- Méthodologie
-- Résultats attendus
-- Implications
-- Recommandations
-- Références
-
-Format Markdown structuré.";
-                    $response = callMistralAI($prompt, "Rédacteur scientifique expert.");
-                    $stepData['report'] = $response;
-                    $sourcesCount = $hypothesis['sources_count'];
-                    
-                    // Mettre à jour le statut
-                    $update = $db->prepare("UPDATE hypotheses SET status = 'completed', steps_completed = ? WHERE id = ?");
-                    $update->execute([9, $hypothesisId]);
-                    break;
-                    
-                default:
-                    throw new Exception("Étape invalide");
-            }
-            
-            // Mettre à jour la progression
-            if ($nextStep < 9) {
-                $update = $db->prepare("UPDATE hypotheses SET steps_completed = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
-                $update->execute([$nextStep, $hypothesisId]);
-            }
-            
-            jsonResponse([
-                'success' => true,
-                'step' => $nextStep,
-                'data' => $stepData,
-                'message' => "Étape $nextStep/9 complétée"
-            ]);
-            
-        } catch (Exception $e) {
-            jsonResponse(['success' => false, 'error' => $e->getMessage()], 500);
-        }
+    if($action === 'reset') {
+        unlink($state_file);
+        header('Location: autonomous.php');
+        exit;
     }
 }
-?>
 
+// Fonction exécution étape
+function execute_step(&$state) {
+    global $PROMPT_LIBRARY, $MISTRAL_CONFIG;
+    
+    $step = $state['step'];
+    
+    // Étape 0: Sélection de cible
+    if($step === 0) {
+        $already = array_slice($state['searched_targets'], -5);
+        $domain_hint = '';
+        
+        if(count($already) > 3) {
+            $domains = ['génétique rare','oncologie','neurologie','maladies métaboliques','immunologie','biologie synthétique','pharmacologie','maladies infectieuses'];
+            $domain_hint = "Explore le domaine: " . $domains[array_rand($domains)] . ". ";
+        }
+        
+        $result = shu_mistral([
+            ['role' => 'system', 'content' => $PROMPT_LIBRARY['target_selection']],
+            ['role' => 'user', 'content' => $domain_hint . "Cibles déjà explorées (ÉVITE-LES ABSOLUMENT): [" . implode(', ', $already) . "]"]
+        ], $MISTRAL_CONFIG['default_model'], 1200, 0.8);
+        
+        if($result['success'] && !empty($result['data']['next_target'])) {
+            $target = trim($result['data']['next_target']);
+            $invalid = ['array','object','null','json','test','example','sample','target','disease','gene','protein'];
+            
+            if(strlen($target) < 3 || in_array(strtolower($target), $invalid) || in_array($target, $already)) {
+                $fallbacks = ['Syndrome de Rett','Ataxie de Friedreich','Maladie de Menkes','Syndrome de Angelman','Maladie de Wilson','Amyotrophie spinale'];
+                $target = $fallbacks[array_rand($fallbacks)];
+            }
+            
+            $state['target'] = $target;
+            $state['target_domain'] = $result['data']['domain'] ?? 'biomed';
+            $state['target_angle'] = $result['data']['research_angle'] ?? '';
+            $state['target_queries'] = $result['data']['suggested_queries'] ?? [$target];
+            $state['searched_targets'][] = $target;
+            $state['memory'] = [];
+            $state['step'] = 1;
+            $state['sources_this_run'] = [];
+            
+            add_to_log($state['session_id'], 0, 'target_selection', '🎯 Cible sélectionnée: ' . $target, 
+                'Domaine: ' . ($result['data']['domain'] ?? 'N/A'), 'success');
+        } else {
+            $fallbacks = ['Progeria','Maladie de Huntington','SLA','Syndrome de Dravet'];
+            $state['target'] = $fallbacks[array_rand($fallbacks)];
+            $state['step'] = 1;
+            $state['target_queries'] = [$state['target']];
+            $state['error_count']++;
+            
+            add_to_log($state['session_id'], 0, 'target_selection', '⚠️ Fallback cible aléatoire', $result['error'] ?? '', 'warning');
+        }
+    }
+    
+    // Étapes 1-8: Collecte des 8 sources principales
+    elseif($step >= 1 && $step <= 8) {
+        $sources_map = [
+            1 => ['fn' => 'genesis_pubmed', 'name' => 'PubMed'],
+            2 => ['fn' => 'genesis_uniprot', 'name' => 'UniProt'],
+            3 => ['fn' => 'genesis_clinvar', 'name' => 'ClinVar'],
+            4 => ['fn' => 'genesis_arxiv', 'name' => 'ArXiv'],
+            5 => ['fn' => 'genesis_europepmc', 'name' => 'EuropePMC'],
+            6 => ['fn' => 'genesis_openalex', 'name' => 'OpenAlex'],
+            7 => ['fn' => 'genesis_chembl', 'name' => 'ChEMBL'],
+            8 => ['fn' => 'genesis_wikidata', 'name' => 'Wikidata'],
+        ];
+        
+        $src = $sources_map[$step];
+        $queries = $state['target_queries'] ?? [$state['target']];
+        $query = $queries[($step - 1) % count($queries)];
+        
+        // Nettoyage requête
+        $clean_query = preg_replace('/[^A-Za-z0-9\-_\+ ]/', '', $query);
+        
+        $result = call_api_source($src['fn'], $clean_query);
+        
+        $count = $result['count'] ?? 0;
+        $type = $count > 0 ? 'success' : 'warning';
+        $emoji = $count > 3 ? '✅' : ($count > 0 ? '⚡' : '⚠️');
+        
+        add_to_log($state['session_id'], $step, 'data_harvest', 
+            "$emoji {$src['name']}: $count résultats", 
+            "Requête: \"$clean_query\"", $type);
+        
+        $state['memory'][] = [
+            'source' => $src['name'],
+            'query' => $clean_query,
+            'count' => $count,
+            'items' => array_slice($result['items'] ?? [], 0, 5),
+            'abstracts' => $result['abstracts'] ?? '',
+        ];
+        
+        if($count > 0) {
+            $state['sources_this_run'][] = $src['name'];
+        }
+        
+        $state['step']++;
+    }
+    
+    // Étape 9: Synthèse IA + génération hypothèse
+    elseif($step === 9) {
+        $valid_sources = array_filter($state['memory'], fn($m) => ($m['count'] ?? 0) > 0);
+        
+        if(count($valid_sources) < 2) {
+            add_to_log($state['session_id'], 9, 'synthesis', '⚠️ Sources insuffisantes', 'Skip vers nouvelle cible', 'warning');
+            $state['step'] = 0;
+            $state['error_count']++;
+        } else {
+            // Construction contexte
+            $ctx = "CIBLE: {$state['target']}\n";
+            $ctx .= "DOMAINE: " . ($state['target_domain'] ?? 'biomed') . "\n";
+            $ctx .= "DONNÉES COLLECTÉES (" . count($valid_sources) . " sources):\n\n";
+            
+            foreach($valid_sources as $m) {
+                $ctx .= "[{$m['source']} — {$m['count']} résultats]\n";
+                if(!empty($m['abstracts'])) {
+                    $ctx .= substr($m['abstracts'], 0, 500) . "\n\n";
+                }
+            }
+            
+            add_to_log($state['session_id'], 9, 'synthesis', '🧠 Synthèse IA en cours...', count($valid_sources) . ' sources', 'info');
+            
+            $result = shu_mistral([
+                ['role' => 'system', 'content' => $PROMPT_LIBRARY['hypothesis_generation']],
+                ['role' => 'user', 'content' => $ctx]
+            ], $MISTRAL_CONFIG['deep_model'], 3000, 0.5);
+            
+            if($result['success'] && isset($result['data']['hypothesis'])) {
+                $d = $result['data'];
+                $hyp_text = $d['hypothesis'] ?? '';
+                
+                if(strlen($hyp_text) < 30 || in_array(strtolower($hyp_text), ['n/a','null','unknown'])) {
+                    add_to_log($state['session_id'], 9, 'synthesis', '⚠️ Hypothèse invalide', 'Skip', 'warning');
+                    $state['step'] = 0;
+                    $state['error_count']++;
+                } else {
+                    // Sauvegarde hypothèse
+                    $hypothesis_data = [
+                        'title' => $state['target'],
+                        'hypothesis' => $d['hypothesis'],
+                        'vulgarized' => $d['vulgarized'] ?? '',
+                        'novelty_score' => $d['novelty_score'] ?? 0.5,
+                        'confidence' => $d['confidence'] ?? 0.5,
+                        'mechanism' => $d['mechanism'] ?? '',
+                        'therapeutic_target' => $d['therapeutic_target'] ?? '',
+                        'evidence_strength' => $d['evidence_strength'] ?? 'moderate',
+                        'research_gaps' => $d['research_gaps'] ?? '',
+                        'keywords' => $d['keywords'] ?? [],
+                        'domain' => $state['target_domain'],
+                        'target_name' => $state['target'],
+                        'session_id' => $state['session_id'],
+                        'step_completed' => 9,
+                        'sources_used' => array_column($valid_sources, 'source'),
+                    ];
+                    
+                    save_hypothesis($hypothesis_data);
+                    $state['hypotheses'][] = $hypothesis_data;
+                    
+                    add_to_log($state['session_id'], 9, 'synthesis', '💡 Hypothèse générée!', 
+                        substr($d['hypothesis'], 0, 100) . '...', 'success');
+                    
+                    $state['step'] = 0;
+                }
+            } else {
+                add_to_log($state['session_id'], 9, 'synthesis', '❌ Erreur synthèse IA', $result['error'] ?? '', 'error');
+                $state['step'] = 0;
+                $state['error_count']++;
+            }
+        }
+    }
+    
+    // Reset si trop d'erreurs
+    if($state['error_count'] >= MAX_ERRORS_BEFORE_RESET) {
+        $state['error_count'] = 0;
+        $state['step'] = 0;
+        add_to_log($state['session_id'], -1, 'reset', '🔄 Reset après erreurs multiples', '', 'warning');
+    }
+}
+
+// Appel API source
+function call_api_source($fn_name, $query) {
+    if(!function_exists($fn_name)) {
+        return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    }
+    return $fn_name($query, 5);
+}
+
+// Fonctions API scientifiques (versions simplifiées)
+function genesis_pubmed($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=pubmed&term=" . urlencode($query) . "&retmode=json&retmax=$max";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $ids = $d['esearchresult']['idlist'] ?? [];
+    $items = [];
+    
+    foreach(array_slice($ids, 0, min(3, count($ids))) as $id) {
+        $items[] = ['pmid' => $id, 'title' => 'PMID: ' . $id, 'url' => "https://pubmed.ncbi.nlm.nih.gov/$id/"];
+    }
+    
+    return ['count' => count($ids), 'items' => $items, 'abstracts' => 'PubMed results for: ' . $query];
+}
+
+function genesis_uniprot($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $gene = preg_replace('/[^A-Za-z0-9\-_]/', '', $query);
+    $url = "https://rest.uniprot.org/uniprotkb/search?query=gene_name:" . urlencode($gene) . "+AND+reviewed:true&format=json&size=3";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $results = $d['results'] ?? [];
+    $items = array_map(fn($p) => ['id' => $p['primaryAccession'] ?? 'N/A', 'name' => $p['uniProtkbId'] ?? 'N/A'], array_slice($results, 0, 3));
+    
+    return ['count' => count($results), 'items' => $items, 'abstracts' => 'UniProt results for: ' . $gene];
+}
+
+function genesis_clinvar($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=clinvar&term=" . urlencode($query) . "&retmode=json&retmax=$max";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $ids = $d['esearchresult']['idlist'] ?? [];
+    $items = array_map(fn($id) => ['vid' => $id, 'url' => "https://www.ncbi.nlm.nih.gov/clinvar/variation/$id/"], array_slice($ids, 0, 3));
+    
+    return ['count' => count($ids), 'items' => $items, 'abstracts' => 'ClinVar variants: ' . implode(', ', array_column($items, 'vid'))];
+}
+
+function genesis_arxiv($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://export.arxiv.org/api/query?search_query=all:" . urlencode(str_replace(' ', '+', $query)) . "&max_results=3";
+    $r = shu_curl($url, null, [], 50);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    @preg_match_all('/<entry>(.*?)<\/entry>/s', $r['data'], $entries);
+    $items = [];
+    foreach(array_slice($entries[1] ?? [], 0, 3) as $entry) {
+        @preg_match('/<title>(.*?)<\/title>/s', $entry, $t);
+        @preg_match('/<id>(.*?)<\/id>/s', $entry, $idm);
+        $items[] = ['id' => basename($idm[1] ?? '#'), 'title' => substr(trim($t[1] ?? ''), 0, 100), 'url' => $idm[1] ?? '#'];
+    }
+    
+    return ['count' => count($items), 'items' => $items, 'abstracts' => 'ArXiv preprints for: ' . $query];
+}
+
+function genesis_europepmc($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://www.ebi.ac.uk/europepmc/webservices/rest/search?query=" . urlencode($query) . "&resultType=lite&pageSize=3&format=json";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $results = $d['resultList']['result'] ?? [];
+    $items = array_map(fn($p) => ['id' => $p['pmid'] ?? $p['id'] ?? 'N/A', 'title' => substr($p['title'] ?? 'N/A', 0, 100)], array_slice($results, 0, 3));
+    
+    return ['count' => count($results), 'items' => $items, 'abstracts' => 'EuropePMC results for: ' . $query];
+}
+
+function genesis_openalex($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://api.openalex.org/works?search=" . urlencode($query) . "&per-page=3&mailto=research@sciencehub.local";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $results = $d['results'] ?? [];
+    $items = array_map(fn($p) => ['id' => $p['id'] ?? 'N/A', 'title' => substr($p['title'] ?? 'N/A', 0, 100)], array_slice($results, 0, 3));
+    
+    return ['count' => count($results), 'items' => $items, 'abstracts' => 'OpenAlex results for: ' . $query];
+}
+
+function genesis_chembl($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://www.ebi.ac.uk/chembl/api/data/molecule.json?pref_name__icontains=" . urlencode($query) . "&limit=3";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $results = $d['molecules'] ?? [];
+    $items = array_map(fn($m) => ['id' => $m['molecule_chembl_id'] ?? 'N/A', 'name' => $m['pref_name'] ?? 'N/A'], array_slice($results, 0, 3));
+    
+    return ['count' => count($results), 'items' => $items, 'abstracts' => 'ChEMBL molecules for: ' . $query];
+}
+
+function genesis_wikidata($query, $max = 5) {
+    if(empty($query)) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    $url = "https://www.wikidata.org/w/api.php?action=wbsearchentities&search=" . urlencode($query) . "&language=en&format=json&limit=3";
+    $r = shu_curl($url);
+    if(!$r['success']) return ['count' => 0, 'items' => [], 'abstracts' => ''];
+    
+    $d = @json_decode($r['data'], true);
+    $results = $d['search'] ?? [];
+    $items = array_map(fn($e) => ['id' => $e['id'] ?? 'N/A', 'label' => $e['label'] ?? 'N/A'], array_slice($results, 0, 3));
+    
+    return ['count' => count($results), 'items' => $items, 'abstracts' => 'Wikidata entities for: ' . $query];
+}
+
+// Sauvegarde état
+function save_state($file, $state) {
+    file_put_contents($file, json_encode($state, JSON_PRETTY_PRINT));
+}
+
+// Récupération logs récents
+$logs = get_recent_logs($SESSION_ID, 50);
+?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Mode Autonome - GENESIS-ULTRA v9.1</title>
+    <title>Mode Autonome — GENESIS-ULTRA v9.1</title>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Mono:ital,wght@0,400;0,700;1,400&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
     <style>
         :root {
-            --primary: #2563eb;
-            --accent: #06b6d4;
-            --dark: #1e293b;
-            --light: #f8fafc;
-            --success: #10b981;
+            --bg: #080c10; --surface: #0d1319; --surface2: #111820; --surface3: #161f2a;
+            --border: rgba(0, 180, 255, 0.12); --border2: rgba(0, 180, 255, 0.25);
+            --accent: #00c8ff; --accent2: #0affb0; --accent3: #ff3d6b; --accent4: #ffd700;
+            --text: #c8dff0; --text-dim: #5a7a95; --text-bright: #e8f4ff;
+            --mono: 'Space Mono', monospace; --display: 'Syne', sans-serif;
         }
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--mono); font-size: 12px; }
+        body::before { content: ''; position: fixed; inset: 0; z-index: 0; pointer-events: none; background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E"); opacity: 0.6; }
+        #root { position: relative; z-index: 1; display: grid; grid-template-rows: auto 1fr auto; min-height: 100vh; }
         
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        #header { display: flex; justify-content: space-between; align-items: center; padding: 16px 24px; border-bottom: 1px solid var(--border2); }
+        .header-brand { font-family: var(--display); font-size: 20px; font-weight: 800; color: var(--text-bright); }
+        .header-brand span { color: var(--accent); }
+        .nav-btn { padding: 8px 16px; border: 1px solid var(--border); background: var(--surface2); color: var(--text); text-decoration: none; font-size: 11px; margin-left: 8px; transition: all 0.2s; }
+        .nav-btn:hover { border-color: var(--accent); color: var(--accent); }
         
-        body {
-            font-family: 'Segoe UI', system-ui, sans-serif;
-            background: linear-gradient(135deg, var(--dark) 0%, #0f172a 100%);
-            color: var(--light);
-            min-height: 100vh;
-            padding-top: 80px;
-        }
+        #main { padding: 24px; display: grid; grid-template-columns: 1fr 400px; gap: 20px; overflow: hidden; }
         
-        nav {
-            background: rgba(30, 41, 59, 0.95);
-            backdrop-filter: blur(10px);
-            padding: 1rem 2rem;
-            position: fixed;
-            width: 100%;
-            top: 0;
-            z-index: 1000;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-        }
+        .panel { background: var(--surface); border: 1px solid var(--border); padding: 20px; overflow-y: auto; max-height: calc(100vh - 200px); }
+        .panel-title { font-family: var(--display); font-size: 16px; font-weight: 700; color: var(--text-bright); margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
         
-        .nav-container {
-            max-width: 1400px;
-            margin: 0 auto;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-        }
+        .status-display { background: var(--surface2); padding: 16px; border-radius: 4px; margin-bottom: 20px; }
+        .status-row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 11px; }
+        .status-label { color: var(--text-dim); }
+        .status-value { color: var(--accent); font-weight: 700; }
         
-        .logo {
-            font-size: 1.5rem;
-            font-weight: bold;
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-            text-decoration: none;
-        }
+        .control-panel { display: grid; gap: 12px; margin-top: 20px; }
+        .btn { padding: 14px 20px; border: none; border-radius: 4px; font-family: var(--mono); font-size: 12px; font-weight: 700; cursor: pointer; transition: all 0.2s; text-align: center; }
+        .btn-primary { background: linear-gradient(135deg, var(--accent), var(--accent2)); color: #000; }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 4px 20px rgba(0,200,255,0.3); }
+        .btn-secondary { background: var(--surface2); border: 1px solid var(--border); color: var(--text); }
+        .btn-secondary:hover { border-color: var(--accent3); color: var(--accent3); }
         
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 2rem;
-        }
+        .log-container { max-height: 500px; overflow-y: auto; }
+        .log-entry { padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 11px; }
+        .log-time { color: var(--text-dim); margin-right: 8px; }
+        .log-phase { color: var(--accent4); margin-right: 8px; }
+        .log-message.info { color: var(--accent); }
+        .log-message.success { color: var(--accent2); }
+        .log-message.warning { color: var(--accent4); }
+        .log-message.error { color: var(--accent3); }
         
-        h1 {
-            font-size: 2.5rem;
-            margin-bottom: 1rem;
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
+        .target-card { background: var(--surface2); padding: 16px; border-left: 3px solid var(--accent2); margin-bottom: 16px; }
+        .target-name { font-family: var(--display); font-size: 14px; font-weight: 700; color: var(--text-bright); }
+        .target-domain { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
         
-        .form-card {
-            background: rgba(30, 41, 59, 0.6);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 16px;
-            padding: 2rem;
-            margin-bottom: 2rem;
-        }
+        #footer { padding: 16px 24px; border-top: 1px solid var(--border); text-align: center; font-size: 10px; color: var(--text-dim); }
         
-        .form-group {
-            margin-bottom: 1.5rem;
-        }
-        
-        label {
-            display: block;
-            margin-bottom: 0.5rem;
-            font-weight: bold;
-            color: var(--accent);
-        }
-        
-        input, textarea, select {
-            width: 100%;
-            padding: 1rem;
-            border: 1px solid rgba(255,255,255,0.2);
-            border-radius: 8px;
-            background: rgba(15, 23, 42, 0.5);
-            color: var(--light);
-            font-size: 1rem;
-        }
-        
-        textarea {
-            min-height: 120px;
-            resize: vertical;
-        }
-        
-        .btn {
-            padding: 1rem 2rem;
-            border-radius: 12px;
-            border: none;
-            cursor: pointer;
-            font-weight: bold;
-            font-size: 1rem;
-            transition: all 0.3s;
-        }
-        
-        .btn-primary {
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            color: white;
-        }
-        
-        .btn-primary:hover {
-            transform: scale(1.05);
-            box-shadow: 0 10px 30px rgba(37, 99, 235, 0.4);
-        }
-        
-        .progress-container {
-            margin: 2rem 0;
-        }
-        
-        .progress-bar {
-            height: 8px;
-            background: rgba(255,255,255,0.1);
-            border-radius: 4px;
-            overflow: hidden;
-            margin-bottom: 1rem;
-        }
-        
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary), var(--accent));
-            transition: width 0.5s ease;
-        }
-        
-        .steps-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-        
-        .step-indicator {
-            padding: 0.8rem;
-            text-align: center;
-            border-radius: 8px;
-            background: rgba(255,255,255,0.05);
-            font-size: 0.9rem;
-        }
-        
-        .step-indicator.active {
-            background: var(--primary);
-            color: white;
-        }
-        
-        .step-indicator.completed {
-            background: var(--success);
-            color: white;
-        }
-        
-        .results-area {
-            background: rgba(15, 23, 42, 0.5);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 12px;
-            padding: 1.5rem;
-            margin-top: 2rem;
-            min-height: 300px;
-            white-space: pre-wrap;
-            font-family: 'Courier New', monospace;
-            font-size: 0.9rem;
-            overflow-y: auto;
-            max-height: 600px;
-        }
-        
-        .loading {
-            display: none;
-            text-align: center;
-            padding: 2rem;
-        }
-        
-        .spinner {
-            border: 4px solid rgba(255,255,255,0.1);
-            border-top: 4px solid var(--accent);
-            border-radius: 50%;
-            width: 50px;
-            height: 50px;
-            animation: spin 1s linear infinite;
-            margin: 0 auto 1rem;
-        }
-        
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
+        @media (max-width: 900px) { #main { grid-template-columns: 1fr; } }
     </style>
 </head>
 <body>
-    <nav>
-        <div class="nav-container">
-            <a href="index.php" class="logo">🔬 Science Hub Ultimate</a>
-            <div style="color: var(--accent);">Mode Autonome - 9 Étapes</div>
-        </div>
-    </nav>
-
-    <div class="container">
-        <h1>🤖 GENESIS-ULTRA v9.1 - Mode Autonome</h1>
-        <p style="opacity: 0.8; margin-bottom: 2rem;">Agent de recherche scientifique autonome en 9 étapes</p>
-
-        <div class="form-card" id="initForm">
-            <form id="autonomousForm">
-                <div class="form-group">
-                    <label for="domain">Domaine Scientifique</label>
-                    <select id="domain" name="domain" required>
-                        <option value="physique">Physique</option>
-                        <option value="biologie">Biologie</option>
-                        <option value="chimie">Chimie</option>
-                        <option value="neurosciences">Neurosciences</option>
-                        <option value="ia">Intelligence Artificielle</option>
-                        <option value="climat">Science du Climat</option>
-                        <option value="medecine">Médecine</option>
-                        <option value="sciences_generales">Sciences Générales</option>
-                    </select>
+    <div id="root">
+        <header id="header">
+            <div class="header-brand">GENESIS-ULTRA <span>v9.1</span> — Mode Autonome</div>
+            <nav>
+                <a href="index.php" class="nav-btn">🏠 Accueil</a>
+                <a href="guided.php" class="nav-btn">📋 Mode Guidé</a>
+                <a href="dashboard.php" class="nav-btn">📊 Dashboard</a>
+            </nav>
+        </header>
+        
+        <main id="main">
+            <div class="panel">
+                <div class="panel-title">🤖 Agent Autonome de Recherche</div>
+                
+                <div class="status-display">
+                    <div class="status-row"><span class="status-label">Cible Actuelle:</span><span class="status-value"><?= $state['target'] ?? 'En attente...' ?></span></div>
+                    <div class="status-row"><span class="status-label">Domaine:</span><span class="status-value"><?= $state['target_domain'] ?? '-' ?></span></div>
+                    <div class="status-row"><span class="status-label">Étape:</span><span class="status-value"><?= $state['step'] ?>/9</span></div>
+                    <div class="status-row"><span class="status-label">Sources Collectées:</span><span class="status-value"><?= count($state['sources_this_run']) ?>/8</span></div>
+                    <div class="status-row"><span class="status-label">Hypothèses Générées:</span><span class="status-value"><?= count($state['hypotheses']) ?></span></div>
+                    <div class="status-row"><span class="status-label">Erreurs:</span><span class="status-value"><?= $state['error_count'] ?>/<?= MAX_ERRORS_BEFORE_RESET ?></span></div>
                 </div>
                 
-                <div class="form-group">
-                    <label for="topic">Sujet Spécifique (optionnel)</label>
-                    <textarea id="topic" name="topic" placeholder="Décrivez un sujet ou une question de recherche spécifique..."></textarea>
+                <?php if($state['target']): ?>
+                <div class="target-card">
+                    <div class="target-name">🎯 <?= htmlspecialchars($state['target']) ?></div>
+                    <div class="target-domain">Domaine: <?= htmlspecialchars($state['target_domain'] ?? 'N/A') ?> • Angle: <?= htmlspecialchars($state['target_angle'] ?? 'N/A') ?></div>
                 </div>
+                <?php endif; ?>
                 
-                <button type="submit" class="btn btn-primary">🚀 Lancer la Recherche Autonome</button>
-            </form>
-        </div>
-
-        <div id="workflowArea" style="display: none;">
-            <div class="progress-container">
-                <div class="progress-bar">
-                    <div class="progress-fill" id="progressFill" style="width: 11%"></div>
-                </div>
-                <div class="steps-grid" id="stepsGrid">
-                    <div class="step-indicator active">1</div>
-                    <div class="step-indicator">2</div>
-                    <div class="step-indicator">3</div>
-                    <div class="step-indicator">4</div>
-                    <div class="step-indicator">5</div>
-                    <div class="step-indicator">6</div>
-                    <div class="step-indicator">7</div>
-                    <div class="step-indicator">8</div>
-                    <div class="step-indicator">9</div>
-                </div>
-                <div style="text-align: center; margin-top: 1rem; color: var(--accent);" id="stepStatus">
-                    Étape 1/9: Génération d'hypothèse
+                <div class="control-panel">
+                    <form method="POST">
+                        <input type="hidden" name="action" value="<?= $state['step'] > 0 ? 'continue' : 'start' ?>">
+                        <button type="submit" class="btn btn-primary">
+                            <?= $state['step'] > 0 ? '▶️ Continuer l\'exécution' : '🚀 Démarrer la recherche autonome' ?>
+                        </button>
+                    </form>
+                    <form method="POST">
+                        <input type="hidden" name="action" value="reset">
+                        <button type="submit" class="btn btn-secondary">🔄 Reset Complet</button>
+                    </form>
                 </div>
             </div>
-
-            <div class="loading" id="loading">
-                <div class="spinner"></div>
-                <div id="loadingText">Traitement en cours...</div>
+            
+            <div class="panel">
+                <div class="panel-title">📝 Logs d'Exécution</div>
+                <div class="log-container">
+                    <?php if(empty($logs)): ?>
+                        <div class="log-entry" style="color: var(--text-dim);">Aucun log. Démarrez la recherche pour voir l'activité.</div>
+                    <?php else: ?>
+                        <?php foreach(array_reverse($logs) as $log): ?>
+                            <div class="log-entry">
+                                <span class="log-time"><?= date('H:i:s', strtotime($log['created_at'])) ?></span>
+                                <span class="log-phase">[<?= $log['phase'] ?>]</span>
+                                <span class="log-message <?= $log['log_type'] ?>"><?= htmlspecialchars($log['message']) ?></span>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </div>
             </div>
-
-            <div class="results-area" id="results"></div>
-
-            <div style="text-align: center; margin-top: 2rem;">
-                <button class="btn btn-primary" id="continueBtn" style="display: none;" onclick="continueWorkflow()">
-                    Continuer vers l'étape suivante →
-                </button>
-            </div>
-        </div>
+        </main>
+        
+        <footer id="footer">
+            GENESIS-ULTRA v9.1 • 9 étapes autonomes • 8 sources scientifiques • Mistral AI • Hostinger Compatible
+        </footer>
     </div>
-
-    <script>
-        let hypothesisId = null;
-        let currentStep = 0;
-        const stepNames = [
-            'Génération d\'hypothèse',
-            'Recherche bibliographique',
-            'Analyse critique',
-            'Conception expérimentale',
-            'Simulation prédictive',
-            'Validation croisée',
-            'Optimisation',
-            'Génération de code',
-            'Rapport final'
-        ];
-
-        document.getElementById('autonomousForm').addEventListener('submit', async (e) => {
-            e.preventDefault();
-            
-            const domain = document.getElementById('domain').value;
-            const topic = document.getElementById('topic').value;
-            
-            document.getElementById('initForm').style.display = 'none';
-            document.getElementById('workflowArea').style.display = 'block';
-            showLoading('Génération de l\'hypothèse initiale...');
-            
-            try {
-                const formData = new FormData();
-                formData.append('action', 'start_autonomous');
-                formData.append('domain', domain);
-                formData.append('topic', topic);
-                
-                const response = await fetch('autonomous.php', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    hypothesisId = data.hypothesis_id;
-                    currentStep = 1;
-                    updateProgress();
-                    displayResults(data.data);
-                    document.getElementById('continueBtn').style.display = 'inline-block';
-                } else {
-                    alert('Erreur: ' + data.error);
-                }
-            } catch (error) {
-                alert('Erreur: ' + error.message);
-            }
-            
-            hideLoading();
-        });
-
-        async function continueWorkflow() {
-            if (!hypothesisId || currentStep >= 9) return;
-            
-            showLoading(`Exécution de l'étape ${currentStep + 1}/9...`);
-            
-            try {
-                const formData = new FormData();
-                formData.append('action', 'continue_workflow');
-                formData.append('hypothesis_id', hypothesisId);
-                formData.append('current_step', currentStep);
-                
-                const response = await fetch('autonomous.php', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const data = await response.json();
-                
-                if (data.success) {
-                    currentStep = data.step;
-                    updateProgress();
-                    displayResults(data.data);
-                    
-                    if (currentStep < 9) {
-                        document.getElementById('continueBtn').style.display = 'inline-block';
-                    } else {
-                        document.getElementById('continueBtn').textContent = '✅ Recherche Terminée!';
-                        document.getElementById('continueBtn').disabled = true;
-                    }
-                } else {
-                    alert('Erreur: ' + data.error);
-                }
-            } catch (error) {
-                alert('Erreur: ' + error.message);
-            }
-            
-            hideLoading();
-        }
-
-        function updateProgress() {
-            const percentage = (currentStep / 9) * 100;
-            document.getElementById('progressFill').style.width = percentage + '%';
-            document.getElementById('stepStatus').textContent = `Étape ${currentStep}/9: ${stepNames[currentStep - 1]}`;
-            
-            const indicators = document.querySelectorAll('.step-indicator');
-            indicators.forEach((indicator, index) => {
-                indicator.classList.remove('active', 'completed');
-                if (index + 1 < currentStep) {
-                    indicator.classList.add('completed');
-                    indicator.textContent = '✓';
-                } else if (index + 1 === currentStep) {
-                    indicator.classList.add('active');
-                    indicator.textContent = index + 1;
-                } else {
-                    indicator.textContent = index + 1;
-                }
-            });
-        }
-
-        function displayResults(data) {
-            const results = document.getElementById('results');
-            results.textContent = JSON.stringify(data, null, 2);
-        }
-
-        function showLoading(text) {
-            document.getElementById('loadingText').textContent = text;
-            document.getElementById('loading').style.display = 'block';
-            document.getElementById('continueBtn').style.display = 'none';
-        }
-
-        function hideLoading() {
-            document.getElementById('loading').style.display = 'none';
-        }
-    </script>
 </body>
 </html>
